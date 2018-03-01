@@ -13,11 +13,16 @@ void Gaussian(vector<vector<float>> &data, vector<float> &vector);
 void ForwardElim(vector<vector<float>> &data, vector<float> &vector);
 void BackSub(vector<vector<float>> &data, std::vector<float> &vector);
 
-__global__ void addKernel(int *c, const int *a, const int *b)
-{
-    int i = threadIdx.x;
-    c[i] = a[i] + b[i];
-}
+void GPUGaussian(vector<vector<float>> &data, int size);
+__global__ void KernelForwardElim(float* upper, float* lower, int* _size, float* multiplier, int* _upperRow);
+
+//__global__ void addKernel(int *c, const int *a, const int *b)
+//{
+//    int i = threadIdx.x;
+//    c[i] = a[i] + b[i];
+//}
+
+void FillMatrix(int size, vector<vector<float>> &data, vector<float> &vector);
 
 int main()
 {
@@ -27,18 +32,17 @@ int main()
         fprintf(stderr, "addWithCuda failed!");
         return 1;
     }
-	vector<vector<float>> data;
-	vector<float> vector = { 8,5,7 };
-	data.push_back(vector);
-	vector.clear();
-	vector = { 4,6,3 };
-	data.push_back(vector);
-	vector.clear();
-	vector = { 3,1,9 };
-	data.push_back(vector);
-	vector.clear();
-	vector = { 2,5,3 };
+
+	int size = 3;
+	vector<vector<float>> data = { { 8,5,7 },{ 4,6,3 },{ 3,1,9 } };
+	vector<float> vector = { 2,5,3 };
+	std::vector<std::vector<float>> data2;
+	data2[0].push_back(2);
+	data2[1].push_back(5);
+	data2[2].push_back(3);
+	//FillMatrix(3, data, vector);
 	Gaussian(data, vector);
+	GPUGaussian(data2, size);
 	
 	// cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.
@@ -169,5 +173,43 @@ void BackSub(vector<vector<float>> &data, std::vector<float> &vector)
 			vector[j] -= subtrahend;
 			data[j][i] = 0;
 		}
+	}
+}
+
+void GPUGaussian(vector<vector<float>>& data, int size)
+{
+	KernelForwardElim<<<1,4>>>()
+}
+
+__global__ void KernelForwardElim(float* upper, float* lower, int* _size, float* multiplier, int* _upperRow)
+{
+	int col = threadIdx.x + blockIdx.x * blockDim.x;
+	int upperRow = *_upperRow;
+	if (col >= upperRow)
+	{
+		int size = *_size;
+		lower[col] *= *multiplier;
+		lower[col] -= upper[col];
+	}
+}
+
+void FillMatrix(int size, vector<vector<float>> &data, vector<float> &vector)
+{
+	data.clear();
+	vector.clear();
+
+	for (int i = 0; i < size; ++i)
+	{
+		for (int j = 0; j < size; ++j)
+		{
+			vector.push_back(rand() % 10 + 1); //values between 1 and 10
+			data.push_back(vector);
+			vector.clear();
+			//pushback random values to data[i][j]
+		}
+	}
+	for (int i = 0; i < size; ++i)
+	{
+		
 	}
 }
