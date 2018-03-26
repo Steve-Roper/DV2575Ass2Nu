@@ -9,12 +9,12 @@
 using namespace std;
 
 cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
-void Gaussian(vector<vector<float>> &data, vector<float> &vector);
-void ForwardElim(vector<vector<float>> &data, vector<float> &vector);
-void BackSub(vector<vector<float>> &data, std::vector<float> &vector);
+void Gaussian(vector<vector<double>> &data, vector<double> &vector);
+void ForwardElim(vector<vector<double>> &data, vector<double> &vector);
+void BackSub(vector<vector<double>> &data, std::vector<double> &vector);
 
-void GPUGaussian(vector<vector<float>> &data, int size);
-__global__ void KernelForwardElim(float* upper, float* lower, int* _size, float* multiplier, int* _upperRow);
+void GPUGaussian(vector<vector<double>> &data, int size);
+__global__ void KernelForwardElim(double* upper, double* lower, int* _size, double* multiplier, int* _upperRow);
 
 //__global__ void addKernel(int *c, const int *a, const int *b)
 //{
@@ -22,7 +22,7 @@ __global__ void KernelForwardElim(float* upper, float* lower, int* _size, float*
 //    c[i] = a[i] + b[i];
 //}
 
-void FillMatrix(int size, vector<vector<float>> &data, vector<float> &vector);
+void FillMatrix(int size, vector<vector<double>> &data, vector<double> &vector);
 
 int main()
 {
@@ -34,9 +34,9 @@ int main()
     }
 
 	int size = 3;
-	vector<vector<float>> data = { { 8,5,7 },{ 4,6,3 },{ 3,1,9 } };
-	vector<float> vector = { 2,5,3 };
-	std::vector<std::vector<float>> data2;
+	vector<vector<double>> data = { { 8,5,7 },{ 4,6,3 },{ 3,1,9 } };
+	vector<double> vector = { 2,5,3 };
+	std::vector<std::vector<double>> data2;
 	data2 = data;
 	data2[0].push_back(2);
 	data2[1].push_back(5);
@@ -136,21 +136,21 @@ Error:
     return cudaStatus;
 }
 
-void Gaussian(vector<vector<float>> &data, std::vector<float> &vector)
+void Gaussian(vector<vector<double>> &data, std::vector<double> &vector)
 {
 	ForwardElim(data, vector);
 	//BackSub(data, vector);
 }
 
-void ForwardElim(vector<vector<float>> &data, std::vector<float> &vector)
+void ForwardElim(vector<vector<double>> &data, std::vector<double> &vector)
 {
 	for (unsigned int i = 0; i < (data.size() - 1); ++i)
 	{
-		float upper = data[i][i];
+		double upper = data[i][i];
 		for (unsigned int j = i; j < (data.size() - 1); ++j)
 		{
-			float lower = data[j + 1][i];
-			float multiplier = upper / lower;
+			double lower = data[j + 1][i];
+			double multiplier = upper / lower;
 			vector[j + 1] *= multiplier;
 			vector[j + 1] -= vector[i];
 			for (unsigned int k = 0; k < data.size(); ++k)
@@ -162,7 +162,7 @@ void ForwardElim(vector<vector<float>> &data, std::vector<float> &vector)
 	}
 }
 
-void BackSub(vector<vector<float>> &data, std::vector<float> &vector)
+void BackSub(vector<vector<double>> &data, std::vector<double> &vector)
 {
 	for (int i = data.size() - 1; i >= 0; --i)
 	{
@@ -170,28 +170,28 @@ void BackSub(vector<vector<float>> &data, std::vector<float> &vector)
 		data[i][i] = 1;
 		for (int j = i - 1; j >= 0; --j) //sätter j = 2 först och sen så länge 2 > 3 what
 		{
-			float subtrahend = data[j][i] * vector[i];
+			double subtrahend = data[j][i] * vector[i];
 			vector[j] -= subtrahend;
 			data[j][i] = 0;
 		}
 	}
 }
 
-void GPUGaussian(vector<vector<float>>& data, int size)
+void GPUGaussian(vector<vector<double>>& data, int size)
 {
-	float* devUpperRow		= 0;
-	float* devLowerRow		= 0;
+	double* devUpperRow		= 0;
+	double* devLowerRow		= 0;
 	int* devSize			= 0;
-	float* devMultiplier	= 0;
+	double* devMultiplier	= 0;
 	int* devUpperRowIdx		= 0;
 
 	//malloc rows
-	cudaError_t cudaStatus = cudaMalloc((void**)&devUpperRow, (size + 1) * sizeof(float));
+	cudaError_t cudaStatus = cudaMalloc((void**)&devUpperRow, (size + 1) * sizeof(double));
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaMalloc failed for upperRow\n");
 		return;
 	}
-	cudaStatus = cudaMalloc((void**)&devLowerRow, (size + 1) * sizeof(float));
+	cudaStatus = cudaMalloc((void**)&devLowerRow, (size + 1) * sizeof(double));
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaMalloc failed for lowerRow\n");
 		return;
@@ -202,7 +202,7 @@ void GPUGaussian(vector<vector<float>>& data, int size)
 		fprintf(stderr, "cudaMalloc failed for size\n");
 		return;
 	}
-	cudaStatus = cudaMalloc((void**)&devMultiplier, sizeof(float));
+	cudaStatus = cudaMalloc((void**)&devMultiplier, sizeof(double));
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaMalloc failed for multiplier\n");
 		return;
@@ -222,21 +222,21 @@ void GPUGaussian(vector<vector<float>>& data, int size)
 
 	for (int i = 0; i < (size - 1); ++i)
 	{
+		cudaStatus = cudaMemcpy(devUpperRow, data[i].data(), (size + 1) * sizeof(double), cudaMemcpyHostToDevice);
+		if (cudaStatus != cudaSuccess) {
+			fprintf(stderr, "cudaMemcpy failed for upperRow\n");
+			return;
+		}
 		//for a given pivot row, reduce all items below to zero
 		for (int j = i + 1; j < (size - 1); ++j)
 		{
-			float multiplier = data[i][i] / data[j][i];
-			cudaStatus = cudaMemcpy(devUpperRow, data[i].data(), (size + 1) * sizeof(float), cudaMemcpyHostToDevice);
-			if (cudaStatus != cudaSuccess) {
-				fprintf(stderr, "cudaMemcpy failed for upperRow\n");
-				return;
-			}
-			cudaStatus = cudaMemcpy(devLowerRow, data[j].data(), (size + 1) * sizeof(float), cudaMemcpyHostToDevice);
+			double multiplier = data[i][i] / data[j][i];
+			cudaStatus = cudaMemcpy(devLowerRow, data[j].data(), (size + 1) * sizeof(double), cudaMemcpyHostToDevice);
 			if (cudaStatus != cudaSuccess) {
 				fprintf(stderr, "cudaMemcpy failed for lowerRow\n");
 				return;
 			}
-			cudaStatus = cudaMemcpy(devMultiplier, &multiplier, sizeof(float), cudaMemcpyHostToDevice);
+			cudaStatus = cudaMemcpy(devMultiplier, &multiplier, sizeof(double), cudaMemcpyHostToDevice);
 			if (cudaStatus != cudaSuccess) {
 				fprintf(stderr, "cudaMemcpy failed for multiplier\n");
 				return;
@@ -248,16 +248,12 @@ void GPUGaussian(vector<vector<float>>& data, int size)
 			}
 
 			KernelForwardElim<<<1, 4>>>(devUpperRow, devLowerRow, devSize, devMultiplier, devUpperRowIdx);
+			cudaThreadSynchronize();
 
-			float* upperRow = 0;
-			float* lowerRow = 0;
+			double* upperRow = 0;
+			double* lowerRow = 0;
 
-			cudaStatus = cudaMemcpy(upperRow, devUpperRow, (size + 1) * sizeof(float), cudaMemcpyDeviceToHost);
-			if (cudaStatus != cudaSuccess) {
-				fprintf(stderr, "cudaMemcpy failed for upperRow\n");
-				return;
-			}
-			cudaStatus = cudaMemcpy(lowerRow, devLowerRow, (size + 1) * sizeof(float), cudaMemcpyDeviceToHost);
+			cudaStatus = cudaMemcpy(lowerRow, devLowerRow, (size + 1) * sizeof(double), cudaMemcpyDeviceToHost);
 			if (cudaStatus != cudaSuccess) {
 				fprintf(stderr, "cudaMemcpy failed for lowerRow\n");
 				return;
@@ -270,7 +266,7 @@ void GPUGaussian(vector<vector<float>>& data, int size)
 
 }
 //											data[i],	data[j],	data.size(), upperMainDiag/theOneUnderIt 
-__global__ void KernelForwardElim(float* upperRow, float* lowerRow, int* _size, float* multiplier, int* _upperRowIdx)
+__global__ void KernelForwardElim(double* upperRow, double* lowerRow, int* _size, double* multiplier, int* _upperRowIdx)
 {
 	int col = threadIdx.x + blockIdx.x * blockDim.x;
 	int upperRowIdx = *_upperRowIdx;
@@ -282,7 +278,7 @@ __global__ void KernelForwardElim(float* upperRow, float* lowerRow, int* _size, 
 	}
 }
 
-void FillMatrix(int size, vector<vector<float>> &data, vector<float> &vector)
+void FillMatrix(int size, vector<vector<double>> &data, vector<double> &vector)
 {
 	data.clear();
 	vector.clear();
