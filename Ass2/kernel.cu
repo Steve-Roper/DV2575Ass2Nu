@@ -1,17 +1,19 @@
-
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 #include <time.h>
 #include <stdio.h>
 #include <vector>
 #include <iostream>
+#define epsilon 0.00000001
 
 using namespace std;
 
 cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
-void Gaussian(vector<vector<double>> &data, vector<double> &vector);
-void ForwardElim(vector<vector<double>> &data, vector<double> &vector);
-void BackSub(vector<vector<double>> &data, std::vector<double> &vector);
+void Gaussian(vector<vector<double>> &data, int size);
+void ForwardElim(vector<vector<double>> &data, int size);
+void BackSub(vector<vector<double>> &data, int size);
+void SwapRows(vector<vector<double>> &data, int size, int upperRow, int lowerRow);
+void CompareResults(vector<vector<double>> &data, vector<vector<double>> &data2, int size);
 
 void GPUGaussian(vector<vector<double>> &data, int size);
 __global__ void KernelForwardElim(double* upper, double* lower, int* _size, double* multiplier, int* _upperRow);
@@ -22,10 +24,11 @@ __global__ void KernelForwardElim(double* upper, double* lower, int* _size, doub
 //    c[i] = a[i] + b[i];
 //}
 
-void FillMatrix(int size, vector<vector<double>> &data, vector<double> &vector);
+void FillMatrix(int size, vector<vector<double>> &data);
 
 int main()
 {
+	srand(time(NULL));
     // Add vectors in parallel.
 	cudaError_t cudaStatus = cudaSuccess;
     if (cudaStatus != cudaSuccess) {
@@ -33,17 +36,23 @@ int main()
         return 1;
     }
 
-	int size = 3;
-	vector<vector<double>> data = { { 8,5,7 },{ 4,6,3 },{ 3,1,9 } };
-	vector<double> vector = { 2,5,3 };
-	std::vector<std::vector<double>> data2;
+	int size = 15;
+	int nrOfThreads = 1;
+	//vector<vector<double>> data = { { 8,5,7 },{ 4,6,3 },{ 3,1,9 } };
+	//vector<double> vector = { 2,5,3 };
+	vector<vector<double>> data, data2;
+	//data.reserve(size * size + 1);
+	//data2.reserve(size * size + 1);
+	//data2 = data;
+	//data2[0].push_back(2);
+	//data2[1].push_back(5);
+	//data2[2].push_back(3);
+	//data = data2;
+	FillMatrix(size, data);
 	data2 = data;
-	data2[0].push_back(2);
-	data2[1].push_back(5);
-	data2[2].push_back(3);
-	//FillMatrix(3, data, vector);
-	Gaussian(data, vector);
+	Gaussian(data, size);
 	GPUGaussian(data2, size);
+	CompareResults(data, data2, size);
 	
 	// cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.
@@ -138,52 +147,69 @@ Error:
     return cudaStatus;
 }
 
-void Gaussian(vector<vector<double>> &data, std::vector<double> &vector)
+void Gaussian(vector<vector<double>> &data, int size)
 {
-	ForwardElim(data, vector);
-	BackSub(data, vector);
-
-	for (int i = 0; i < data.size(); ++i)
-	{
-		for (int j = 0; j < data[i].size(); ++j)
-		{
-			cout << data[i][j] << '\t';
-		}
-		cout << vector[i] << endl;
-	}
+	ForwardElim(data, size);
+	BackSub(data, size);
 }
 
-void ForwardElim(vector<vector<double>> &data, std::vector<double> &vector)
+void ForwardElim(vector<vector<double>> &data, int size)
 {
-	for (unsigned int i = 0; i < (data.size() - 1); ++i)
+	for (unsigned int i = 0; i < size - 1; ++i)
 	{
-		double upper = data[i][i];
-		for (unsigned int j = i; j < (data.size() - 1); ++j)
+		if (abs(data[i][i]) < epsilon)
 		{
-			double lower = data[j + 1][i];
-			double multiplier = upper / lower;
-			vector[j + 1] *= multiplier;
-			vector[j + 1] -= vector[i];
-			for (unsigned int k = 0; k < data.size(); ++k)
+			int j = NULL;
+			for (j = i + 1; j < size; ++j)
 			{
-				data[j + 1][k] *= multiplier;
-				data[j + 1][k] -= data[i][k];
+				if (abs(data[j][i]) > epsilon)
+				{
+					SwapRows(data, size, i, j);
+					break;
+				}
+			}
+
+			if (j == size - 1)
+				data[i][i] = 1;
+		}
+		double upper = data[i][i];
+		for (unsigned int j = i + 1; j < size; ++j)
+		{
+			bool breaK = false;
+			while (j < size && abs(data[j][i]) < epsilon)
+			{
+				++j;
+				if (j == size)
+				{
+					breaK = true;
+					break;
+				}
+			}
+			if (breaK)
+			{
+				break;
+			}
+			double lower = data[j][i];
+			double multiplier = upper / lower;
+			for (unsigned int k = 0; k < size + 1; ++k)
+			{
+				data[j][k] *= multiplier;
+				data[j][k] -= data[i][k];
 			}
 		}
 	}
 }
 
-void BackSub(vector<vector<double>> &data, std::vector<double> &vector)
+void BackSub(vector<vector<double>> &data, int size)
 {
-	for (int i = data.size() - 1; i >= 0; --i)
+	for (int i = size - 1; i >= 0; --i)
 	{
-		//data[i][data.size() - 1] /= data[i][i];
-		vector[i] /= data[i][i];
+		data[i][size] /= data[i][i];
 		data[i][i] = 1;
 		for (int j = i - 1; j >= 0; --j) //sätter j = 2 först och sen så länge 2 > 3 what
 		{
-			double subtrahend = data[j][i] * vector[i];
-			vector[j] -= subtrahend;
+			double subtrahend = data[j][i] * data[i][size];
+			data[j][size] -= subtrahend;
 			data[j][i] = 0;
 		}
 	}
@@ -234,6 +260,22 @@ void GPUGaussian(vector<vector<double>>& data, int size)
 
 	for (int i = 0; i < (size - 1); ++i)
 	{
+		if (abs(data[i][i]) < epsilon)
+		{
+			int j = NULL;
+			for (j = i + 1; j < size; ++j)
+			{
+				if (abs(data[j][i]) > epsilon)
+				{
+					SwapRows(data, size, i, j);
+					break;
+				}
+			}
+
+			if (j == size - 1)
+				data[i][i] = 1;
+		}
+
 		double* tempData = data[i].data();
 		cudaStatus = cudaMemcpy((void*)devUpperRow, (void*)tempData, (size + 1) * sizeof(double), cudaMemcpyHostToDevice);
 		if (cudaStatus != cudaSuccess) {
@@ -249,6 +291,20 @@ void GPUGaussian(vector<vector<double>>& data, int size)
 		//for a given pivot element, reduce all items below to zero
 		for (int j = i + 1; j < size; ++j)
 		{
+			bool breaK = false;
+			while (abs(data[j][i]) < epsilon)
+			{
+				++j;
+				if (j == size)
+				{
+					breaK = true;
+					break;
+				}
+			}
+			if (breaK)
+			{
+				break;
+			}
 			double multiplier = data[i][i] / data[j][i];
 			tempData = data[j].data();
 			cudaStatus = cudaMemcpy((void*)devLowerRow, (void*)tempData, (size + 1) * sizeof(double), cudaMemcpyHostToDevice);
@@ -262,8 +318,7 @@ void GPUGaussian(vector<vector<double>>& data, int size)
 				return;
 			}
 
-			KernelForwardElim<<<1, 16>>>(devUpperRow, devLowerRow, devSize, devMultiplier, devUpperRowIdx);
-			cudaThreadSynchronize();
+			KernelForwardElim<<<1, size + 1>>>(devUpperRow, devLowerRow, devSize, devMultiplier, devUpperRowIdx);
 
 			double* lowerRow = (double*)malloc((size + 1) * sizeof(double));
 
@@ -279,9 +334,38 @@ void GPUGaussian(vector<vector<double>>& data, int size)
 			}
 		}
 	}
-
-
+	BackSub(data, size);
 }
+
+void SwapRows(vector<vector<double>> &data, int size, int upperRow, int lowerRow)
+{
+	vector<double> temp;
+	temp = data[upperRow];
+	data[upperRow] = data[lowerRow];
+	data[lowerRow] = temp;
+}
+
+void CompareResults(vector<vector<double>>& data, vector<vector<double>>& data2, int size)
+{
+	bool test = true;
+	for (int i = 0; i < size; ++i)
+	{
+		for (int j = 0; j < size + 1; ++j)
+		{
+			if (abs(data[i][j] - data2[i][j]) > epsilon)
+			{
+				cout << "Something went wrong" << endl;
+				cout << "CPU: " << data[i][j] << "|\t" << data2[i][j] << endl;
+				test = false;
+			}
+		}
+	}
+	if (test)
+	{
+		cout << "CPU and GPU results match!" << endl;
+	}
+}
+
 //											data[i],	data[j],	data.size(), upperMainDiag/theOneUnderIt 
 __global__ void KernelForwardElim(double* upperRow, double* lowerRow, int* _size, double* multiplier, int* _upperRowIdx)
 {
@@ -294,23 +378,18 @@ __global__ void KernelForwardElim(double* upperRow, double* lowerRow, int* _size
 	}
 }
 
-void FillMatrix(int size, vector<vector<double>> &data, vector<double> &vector)
+void FillMatrix(int size, vector<vector<double>> &data)
 {
 	data.clear();
-	vector.clear();
 
 	for (int i = 0; i < size; ++i)
 	{
-		for (int j = 0; j < size; ++j)
+		vector<double> temp;
+		for (int j = 0; j < size + 1; ++j)
 		{
-			vector.push_back(rand() % 10 + 1); //values between 1 and 10
-			data.push_back(vector);
-			vector.clear();
-			//pushback random values to data[i][j]
+			temp.push_back(rand() % 10 + 1);
 		}
-	}
-	for (int i = 0; i < size; ++i)
-	{
-		
+		data.push_back(temp);
+		temp.clear();
 	}
 }
