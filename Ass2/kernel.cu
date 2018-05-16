@@ -53,6 +53,8 @@ int main()
         return 1;
     }
 
+
+	cin.get();
     return 0;
 }
 
@@ -139,7 +141,16 @@ Error:
 void Gaussian(vector<vector<double>> &data, std::vector<double> &vector)
 {
 	ForwardElim(data, vector);
-	//BackSub(data, vector);
+	BackSub(data, vector);
+
+	for (int i = 0; i < data.size(); ++i)
+	{
+		for (int j = 0; j < data[i].size(); ++j)
+		{
+			cout << data[i][j] << '\t';
+		}
+		cout << vector[i] << endl;
+	}
 }
 
 void ForwardElim(vector<vector<double>> &data, std::vector<double> &vector)
@@ -166,6 +177,7 @@ void BackSub(vector<vector<double>> &data, std::vector<double> &vector)
 {
 	for (int i = data.size() - 1; i >= 0; --i)
 	{
+		//data[i][data.size() - 1] /= data[i][i];
 		vector[i] /= data[i][i];
 		data[i][i] = 1;
 		for (int j = i - 1; j >= 0; --j) //sätter j = 2 först och sen så länge 2 > 3 what
@@ -222,44 +234,49 @@ void GPUGaussian(vector<vector<double>>& data, int size)
 
 	for (int i = 0; i < (size - 1); ++i)
 	{
-		cudaStatus = cudaMemcpy(devUpperRow, data[i].data(), (size + 1) * sizeof(double), cudaMemcpyHostToDevice);
+		double* tempData = data[i].data();
+		cudaStatus = cudaMemcpy((void*)devUpperRow, (void*)tempData, (size + 1) * sizeof(double), cudaMemcpyHostToDevice);
 		if (cudaStatus != cudaSuccess) {
 			fprintf(stderr, "cudaMemcpy failed for upperRow\n");
 			return;
 		}
-		//for a given pivot row, reduce all items below to zero
-		for (int j = i + 1; j < (size - 1); ++j)
+		cudaStatus = cudaMemcpy((void*)devUpperRowIdx, (void*)&i, sizeof(int), cudaMemcpyHostToDevice);
+		if (cudaStatus != cudaSuccess) {
+			fprintf(stderr, "cudaMemcpy failed for multiplier\n");
+			return;
+		}
+
+		//for a given pivot element, reduce all items below to zero
+		for (int j = i + 1; j < size; ++j)
 		{
 			double multiplier = data[i][i] / data[j][i];
-			cudaStatus = cudaMemcpy(devLowerRow, data[j].data(), (size + 1) * sizeof(double), cudaMemcpyHostToDevice);
+			tempData = data[j].data();
+			cudaStatus = cudaMemcpy((void*)devLowerRow, (void*)tempData, (size + 1) * sizeof(double), cudaMemcpyHostToDevice);
 			if (cudaStatus != cudaSuccess) {
-				fprintf(stderr, "cudaMemcpy failed for lowerRow\n");
+				fprintf(stderr, "cudaMemcpy failed for lowerRow HtD\n");
 				return;
 			}
-			cudaStatus = cudaMemcpy(devMultiplier, &multiplier, sizeof(double), cudaMemcpyHostToDevice);
-			if (cudaStatus != cudaSuccess) {
-				fprintf(stderr, "cudaMemcpy failed for multiplier\n");
-				return;
-			}
-			cudaStatus = cudaMemcpy(devUpperRowIdx, &i, sizeof(int), cudaMemcpyHostToDevice);
+			cudaStatus = cudaMemcpy((void*)devMultiplier, (void*)&multiplier, sizeof(double), cudaMemcpyHostToDevice);
 			if (cudaStatus != cudaSuccess) {
 				fprintf(stderr, "cudaMemcpy failed for multiplier\n");
 				return;
 			}
 
-			KernelForwardElim<<<1, 4>>>(devUpperRow, devLowerRow, devSize, devMultiplier, devUpperRowIdx);
+			KernelForwardElim<<<1, 16>>>(devUpperRow, devLowerRow, devSize, devMultiplier, devUpperRowIdx);
 			cudaThreadSynchronize();
 
-			double* upperRow = 0;
-			double* lowerRow = 0;
+			double* lowerRow = (double*)malloc((size + 1) * sizeof(double));
 
-			cudaStatus = cudaMemcpy(lowerRow, devLowerRow, (size + 1) * sizeof(double), cudaMemcpyDeviceToHost);
+			cudaStatus = cudaMemcpy((void*)lowerRow, (void*)devLowerRow, (size + 1) * sizeof(double), cudaMemcpyDeviceToHost);
 			if (cudaStatus != cudaSuccess) {
-				fprintf(stderr, "cudaMemcpy failed for lowerRow\n");
+				fprintf(stderr, "cudaMemcpy failed for lowerRow DtH\n");
 				return;
 			}
 
-			int stopper = 0;
+			for (int k = 0; k < size + 1; ++k)
+			{
+				data[j][k] = lowerRow[k];
+			}
 		}
 	}
 
@@ -270,9 +287,8 @@ __global__ void KernelForwardElim(double* upperRow, double* lowerRow, int* _size
 {
 	int col = threadIdx.x + blockIdx.x * blockDim.x;
 	int upperRowIdx = *_upperRowIdx;
-	if (col >= upperRowIdx)
+	if (col >= upperRowIdx && col <= *_size)
 	{
-		int size = *_size;
 		lowerRow[col] *= *multiplier;
 		lowerRow[col] -= upperRow[col];
 	}
