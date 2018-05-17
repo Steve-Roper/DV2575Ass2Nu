@@ -2,24 +2,20 @@
 #include "device_launch_parameters.h"
 #include <time.h>
 #include <stdio.h>
-#include <vector>
 #include <iostream>
 #define epsilon 0.000001
 
 using namespace std;
 
-cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
-void Gaussian(vector<vector<double>> &data, int size);
-void ForwardElim(vector<vector<double>> &data, int size);
-void BackSub(vector<vector<double>> &data, int size);
-void SwapRows(vector<vector<double>> &data, int size, int upperRow, int lowerRow);
-bool CompareResults(vector<vector<double>> &data, vector<vector<double>> &data2, int size);
-
-void GPUGaussian(vector<vector<double>> &data, int size, int blocks, int colsPerThread);
+void Gaussian(double*** data, int size);
+void ForwardElim(double*** data, int size);
+void BackSub(double*** data, int size);
+void SwapRows(double*** data, int size, int upperRow, int lowerRow);
+bool CompareResults(double*** data, double*** data2, int size);
+void GPUGaussian(double*** data, int size, int blocks, int colsPerThread);
+void FillMatrix(double*** data, double*** data2, double*** backup, int size);
+void CopyMatrix(double*** src, double*** dest, int size);
 __global__ void KernelForwardElim(double* upper, double* lower, int* _size, double* multiplier, int* _upperRow, int* colsPerThread);
-
-
-void FillMatrix(int size, vector<vector<double>> &data);
 
 int main()
 {
@@ -29,27 +25,30 @@ int main()
 
 	//int size = 256;
 	//int colsPerThread = 1;
-	vector<vector<double>> data, data2, backup;
-	//double** data, data2, backup;
+	//vector<vector<double>> data, data2, backup;
+	double** data, **data2, **backup;
 
 	for (int size = 128; size < 1025; size *= 2)
 	{
-		FillMatrix(size, data);
-		//backup = (double**)malloc((size + 1) * size * sizeof(double));
-		backup = data;
-		Gaussian(data, size);
+		data = (double**)malloc((size + 1) * size * sizeof(double));
+		backup = (double**)malloc((size + 1) * size * sizeof(double));
+		data2 = (double**)malloc((size + 1) * size * sizeof(double));
+		FillMatrix(&data, &data2, &backup, size);
+		Gaussian(&data, size);
 		for (int colsPerThread = 1; colsPerThread < 9; colsPerThread *= 2)
 		{
-			data2.clear();
-			data2 = backup;
+			CopyMatrix(&backup, &data2, size);
 			int threads = (size + 1) / colsPerThread;
 			int blocks = (threads - 1) / 1024 + 1; /*1024 max for current graphics card used*/
-			GPUGaussian(data2, size, blocks, colsPerThread);
-			if (!CompareResults(data, data2, size))
+			GPUGaussian(&data2, size, blocks, colsPerThread);
+			if (!CompareResults(&data, &data2, size))
 			{
 				break;
 			}
 		}
+		free(data);
+		free(data2);
+		free(backup);
 	}
 	// cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.
@@ -63,7 +62,7 @@ int main()
     return 0;
 }
 
-void Gaussian(vector<vector<double>> &data, int size)
+void Gaussian(double*** data, int size)
 {
 	clock_t t;
 	t = clock();
@@ -75,16 +74,16 @@ void Gaussian(vector<vector<double>> &data, int size)
 	BackSub(data, size);
 }
 
-void ForwardElim(vector<vector<double>> &data, int size)
+void ForwardElim(double*** data, int size)
 {
 	for (unsigned int i = 0; i < size - 1; ++i)
 	{
-		if (abs(data[i][i]) < epsilon)
+		if (abs((*data)[i][i]) < epsilon)
 		{
 			int j = NULL;
 			for (j = i + 1; j < size; ++j)
 			{
-				if (abs(data[j][i]) > epsilon)
+				if (abs((*data)[j][i]) > epsilon)
 				{
 					SwapRows(data, size, i, j);
 					break;
@@ -92,13 +91,13 @@ void ForwardElim(vector<vector<double>> &data, int size)
 			}
 
 			if (j == size - 1)
-				data[i][i] = 1;
+				(*data)[i][i] = 1;
 		}
-		double upper = data[i][i];
+		double upper = (*data)[i][i];
 		for (unsigned int j = i + 1; j < size; ++j)
 		{
 			bool breaK = false;
-			while (j < size && abs(data[j][i]) < epsilon)
+			while (j < size && abs((*data)[j][i]) < epsilon)
 			{
 				++j;
 				if (j == size)
@@ -111,33 +110,33 @@ void ForwardElim(vector<vector<double>> &data, int size)
 			{
 				break;
 			}
-			double lower = data[j][i];
+			double lower = (*data)[j][i];
 			double multiplier = upper / lower;
 			for (unsigned int k = i + 1; k < size + 1; ++k)
 			{
-				data[j][k] *= multiplier;
-				data[j][k] -= data[i][k];
+				(*data)[j][k] *= multiplier;
+				(*data)[j][k] -= (*data)[i][k];
 			}
 		}
 	}
 }
 
-void BackSub(vector<vector<double>> &data, int size)
+void BackSub(double*** data, int size)
 {
 	for (int i = size - 1; i >= 0; --i)
 	{
-		data[i][size] /= data[i][i];
-		data[i][i] = 1;
+		(*data)[i][size] /= (*data)[i][i];
+		(*data)[i][i] = 1;
 		for (int j = i - 1; j >= 0; --j) //sätter j = 2 först och sen så länge 2 > 3 what
 		{
-			double subtrahend = data[j][i] * data[i][size];
-			data[j][size] -= subtrahend;
-			data[j][i] = 0;
+			double subtrahend = (*data)[j][i] * (*data)[i][size];
+			(*data)[j][size] -= subtrahend;
+			(*data)[j][i] = 0;
 		}
 	}
 }
 
-void GPUGaussian(vector<vector<double>>& data, int size, int blocks, int colsPerThread)
+void GPUGaussian(double*** data, int size, int blocks, int colsPerThread)
 {
 	double* devUpperRow		= 0;
 	double* devLowerRow		= 0;
@@ -195,12 +194,12 @@ void GPUGaussian(vector<vector<double>>& data, int size, int blocks, int colsPer
 	t = clock();
 	for (int i = 0; i < (size - 1); ++i)
 	{
-		if (abs(data[i][i]) < epsilon)
+		if (abs((*data)[i][i]) < epsilon)
 		{
 			int j = NULL;
 			for (j = i + 1; j < size; ++j)
 			{
-				if (abs(data[j][i]) > epsilon)
+				if (abs((*data)[j][i]) > epsilon)
 				{
 					SwapRows(data, size, i, j);
 					break;
@@ -208,10 +207,12 @@ void GPUGaussian(vector<vector<double>>& data, int size, int blocks, int colsPer
 			}
 
 			if (j == size - 1)
-				data[i][i] = 1;
+				(*data)[i][i] = 1;
 		}
 
-		double* tempData = data[i].data();
+		double* tempData = (double*)malloc((size + 1) * sizeof(double));
+		tempData = (*data)[i];
+
 		cudaStatus = cudaMemcpy((void*)devUpperRow, (void*)tempData, (size + 1) * sizeof(double), cudaMemcpyHostToDevice);
 		if (cudaStatus != cudaSuccess) {
 			fprintf(stderr, "cudaMemcpy failed for upperRow\n");
@@ -227,7 +228,7 @@ void GPUGaussian(vector<vector<double>>& data, int size, int blocks, int colsPer
 		for (int j = i + 1; j < size; ++j)
 		{
 			bool breaK = false;
-			while (abs(data[j][i]) < epsilon)
+			while (abs((*data)[j][i]) < epsilon)
 			{
 				++j;
 				if (j == size)
@@ -240,8 +241,8 @@ void GPUGaussian(vector<vector<double>>& data, int size, int blocks, int colsPer
 			{
 				break;
 			}
-			double multiplier = data[i][i] / data[j][i];
-			tempData = data[j].data();
+			double multiplier = (*data)[i][i] / (*data)[j][i];
+			tempData = (*data)[j];
 			cudaStatus = cudaMemcpy((void*)devLowerRow, (void*)tempData, (size + 1) * sizeof(double), cudaMemcpyHostToDevice);
 			if (cudaStatus != cudaSuccess) {
 				fprintf(stderr, "cudaMemcpy failed for lowerRow HtD\n");
@@ -264,10 +265,7 @@ void GPUGaussian(vector<vector<double>>& data, int size, int blocks, int colsPer
 				return;
 			}
 
-			for (int k = 0; k < size + 1; ++k)
-			{
-				data[j][k] = lowerRow[k];
-			}
+			(*data)[j] = lowerRow;
 		}	
 	}
 	t = clock() - t;
@@ -282,25 +280,25 @@ void GPUGaussian(vector<vector<double>>& data, int size, int blocks, int colsPer
 	cudaFree(devColsPerThread);
 }
 
-void SwapRows(vector<vector<double>> &data, int size, int upperRow, int lowerRow)
+void SwapRows(double*** data, int size, int upperRow, int lowerRow)
 {
-	vector<double> temp;
-	temp = data[upperRow];
-	data[upperRow] = data[lowerRow];
-	data[lowerRow] = temp;
+	double* temp = (double*)malloc((size + 1) * sizeof(double));
+	temp = (*data)[upperRow];
+	(*data)[upperRow] = (*data)[lowerRow];
+	(*data)[lowerRow] = temp;
 }
 
-bool CompareResults(vector<vector<double>>& data, vector<vector<double>>& data2, int size)
+bool CompareResults(double*** data, double*** data2, int size)
 {
 	bool test = true;
 	for (int i = 0; i < size; ++i)
 	{
 		for (int j = 0; j < size + 1; ++j)
 		{
-			if (abs(data[i][j] - data2[i][j]) > epsilon && abs(data[i][j]) > epsilon && abs(data2[i][j]) > epsilon)
+			if (abs((*data)[i][j] - (*data2)[i][j]) > epsilon && abs((*data)[i][j]) > epsilon && abs((*data2)[i][j]) > epsilon)
 			{
 				cout << "Something went wrong" << endl;
-				cout << "CPU: " << data[i][j] << "|\tGPU:" << data2[i][j] << endl;
+				cout << "CPU: " << (*data)[i][j] << "|\tGPU:" << (*data2)[i][j] << endl;
 				test = false;
 			}
 		}
@@ -328,18 +326,31 @@ __global__ void KernelForwardElim(double* upperRow, double* lowerRow, int* _size
 	}
 }
 
-void FillMatrix(int size, vector<vector<double>> &data)
+void FillMatrix(double*** data, double*** data2, double*** backup, int size)
 {
-	data.clear();
-
 	for (int i = 0; i < size; ++i)
 	{
-		vector<double> temp;
+		double* temp = (double*)malloc((size + 1) * sizeof(double));
+		double* temp2 = (double*)malloc((size + 1) * sizeof(double));
+		double* temp3 = (double*)malloc((size + 1) * sizeof(double));
 		for (int j = 0; j < size + 1; ++j)
 		{
-			temp.push_back(rand() % 10 + 1);
+			double val = rand() % 10 + 1;
+			temp[j] = temp2[j] = temp3[j] = val;
 		}
-		data.push_back(temp);
-		temp.clear();
+		(*data)[i] = temp;
+		(*data2)[i] = temp2;
+		(*backup)[i] = temp3;
+	}
+}
+
+void CopyMatrix(double*** src, double*** dest, int size)
+{
+	for (int i = 0; i < size; ++i)
+	{
+		for (int j = 0; j < size + 1; ++j)
+		{
+			(*dest)[i][j] = (*src)[i][j];
+		}
 	}
 }
