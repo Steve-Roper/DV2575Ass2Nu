@@ -7,15 +7,15 @@
 
 using namespace std;
 
-void Gaussian(double*** data, int size);
-void ForwardElim(double*** data, int size);
-void BackSub(double*** data, int size);
-void SwapRows(double*** data, int size, int upperRow, int lowerRow);
-bool CompareResults(double*** data, double*** data2, int size);
-void GPUGaussian(double*** data, int size, int blocks, int colsPerThread);
-void FillMatrix(double*** data, double*** data2, double*** backup, int size);
-void CopyMatrix(double*** src, double*** dest, int size);
-__global__ void KernelForwardElim(double* upper, double* lower, int* _size, double* multiplier, int* _upperRow, int* colsPerThread);
+void Gaussian(double* data, int size);
+void ForwardElim(double* data, int size);
+void BackSub(double* data, int size);
+void SwapRows(double* data, int size, int upperRow, int lowerRow);
+bool CompareResults(double* data, double* data2, int size);
+void GPUGaussian(double* &data, int size, int blocks, int rowsPerThread);
+void FillMatrix(double* data, double* data2, double* backup, int size);
+void CopyMatrix(double* src, double* dest, int size);
+__global__ void KernelForwardElim(double* _matrix, int* _size, int* _upperRowIdx, int* _rowsPerThread);
 
 int main()
 {
@@ -26,22 +26,24 @@ int main()
 	//int size = 256;
 	//int colsPerThread = 1;
 	//vector<vector<double>> data, data2, backup;
-	double** data, **data2, **backup;
+	double* data, *data2, *backup;
 
 	for (int size = 128; size < 1025; size *= 2)
 	{
-		data = (double**)malloc((size + 1) * size * sizeof(double));
-		backup = (double**)malloc((size + 1) * size * sizeof(double));
-		data2 = (double**)malloc((size + 1) * size * sizeof(double));
-		FillMatrix(&data, &data2, &backup, size);
-		Gaussian(&data, size);
-		for (int colsPerThread = 1; colsPerThread < 9; colsPerThread *= 2)
+		cout << "Working on size: " << size << endl;
+		data = (double*)malloc((size + 1) * size * sizeof(double));
+		backup = (double*)malloc((size + 1) * size * sizeof(double));
+		data2 = (double*)malloc((size + 1) * size * sizeof(double));
+		FillMatrix(data, data2, backup, size);
+		Gaussian(data, size);
+		for (int rowsPerThread = 1; rowsPerThread < 9; rowsPerThread *= 2)
 		{
-			CopyMatrix(&backup, &data2, size);
-			int threads = (size + 1) / colsPerThread;
+			cout << "Working on rowsPerThread: " << rowsPerThread << endl;
+			CopyMatrix(backup, data2, size);
+			int threads = (size + 1) / rowsPerThread;
 			int blocks = (threads - 1) / 1024 + 1; /*1024 max for current graphics card used*/
-			GPUGaussian(&data2, size, blocks, colsPerThread);
-			if (!CompareResults(&data, &data2, size))
+			GPUGaussian(data2, size, blocks, rowsPerThread);
+			if (!CompareResults(data, data2, size))
 			{
 				break;
 			}
@@ -62,7 +64,7 @@ int main()
     return 0;
 }
 
-void Gaussian(double*** data, int size)
+void Gaussian(double* data, int size)
 {
 	clock_t t;
 	t = clock();
@@ -74,16 +76,16 @@ void Gaussian(double*** data, int size)
 	BackSub(data, size);
 }
 
-void ForwardElim(double*** data, int size)
+void ForwardElim(double* data, int size)
 {
 	for (unsigned int i = 0; i < size - 1; ++i)
 	{
-		if (abs((*data)[i][i]) < epsilon)
+		/*if (abs(data[i * (size + 1) + i]) < epsilon)
 		{
 			int j = NULL;
 			for (j = i + 1; j < size; ++j)
 			{
-				if (abs((*data)[j][i]) > epsilon)
+				if (abs(data[j * (size + 1) + i]) > epsilon)
 				{
 					SwapRows(data, size, i, j);
 					break;
@@ -91,13 +93,13 @@ void ForwardElim(double*** data, int size)
 			}
 
 			if (j == size - 1)
-				(*data)[i][i] = 1;
-		}
-		double upper = (*data)[i][i];
+				data[i * (size + 1) + i] = 1;
+		}*/
+		double upper = data[i * (size + 1) + i];
 		for (unsigned int j = i + 1; j < size; ++j)
 		{
-			bool breaK = false;
-			while (j < size && abs((*data)[j][i]) < epsilon)
+			/*bool breaK = false;
+			while (j < size && abs(data[j * (size + 1) + i]) < epsilon)
 			{
 				++j;
 				if (j == size)
@@ -109,44 +111,47 @@ void ForwardElim(double*** data, int size)
 			if (breaK)
 			{
 				break;
-			}
-			double lower = (*data)[j][i];
+			}*/
+			double lower = data[j * (size + 1) + i];
 			double multiplier = upper / lower;
 			for (unsigned int k = i + 1; k < size + 1; ++k)
 			{
-				(*data)[j][k] *= multiplier;
-				(*data)[j][k] -= (*data)[i][k];
+				data[j * (size + 1) + k] *= multiplier;
+				data[j * (size + 1) + k] -= data[i * (size + 1) + k];
 			}
 		}
 	}
 }
 
-void BackSub(double*** data, int size)
+void BackSub(double* data, int size)
 {
 	for (int i = size - 1; i >= 0; --i)
 	{
-		(*data)[i][size] /= (*data)[i][i];
-		(*data)[i][i] = 1;
-		for (int j = i - 1; j >= 0; --j) //sätter j = 2 först och sen så länge 2 > 3 what
+		data[i * (size + 1) + size] /= data[i * (size + 1) + i];
+		//data[i * (size + 1) + i] = 1;
+		for (int j = i - 1; j >= 0; --j)
 		{
-			double subtrahend = (*data)[j][i] * (*data)[i][size];
-			(*data)[j][size] -= subtrahend;
-			(*data)[j][i] = 0;
+			double subtrahend = data[j * (size + 1) + i] * data[i * (size + 1) + size];
+			data[j * (size + 1) + size] -= subtrahend;
+			//data[j * (size + 1) * i] = 0;
 		}
 	}
 }
 
-void GPUGaussian(double*** data, int size, int blocks, int colsPerThread)
+void GPUGaussian(double* &data, int size, int blocks, int rowsPerThread)
 {
-	double* devUpperRow		= 0;
-	double* devLowerRow		= 0;
+	double* devMatrix		= 0;
 	int* devSize			= 0;
-	double* devMultiplier	= 0;
 	int* devUpperRowIdx		= 0;
-	int* devColsPerThread	= 0;
+	int* devRowsPerThread	= 0;
 
-	//malloc rows
-	cudaError_t cudaStatus = cudaMalloc((void**)&devUpperRow, (size + 1) * sizeof(double));
+	//malloc matrix
+	cudaError_t cudaStatus = cudaMalloc((void**)&devMatrix, (size + 1) * size * sizeof(double));
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "cudaMalloc failed for matrix\n");
+		return;
+	}
+	/*cudaError_t cudaStatus = cudaMalloc((void**)&devUpperRow, (size + 1) * sizeof(double));
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaMalloc failed for upperRow\n");
 		return;
@@ -155,16 +160,11 @@ void GPUGaussian(double*** data, int size, int blocks, int colsPerThread)
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaMalloc failed for lowerRow\n");
 		return;
-	}
+	}*/
 	//malloc rest
 	cudaStatus = cudaMalloc((void**)&devSize, sizeof(int));
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaMalloc failed for size\n");
-		return;
-	}
-	cudaStatus = cudaMalloc((void**)&devMultiplier, sizeof(double));
-	if (cudaStatus != cudaSuccess) {
-		fprintf(stderr, "cudaMalloc failed for multiplier\n");
 		return;
 	}
 	cudaStatus = cudaMalloc((void**)&devUpperRowIdx, sizeof(int));
@@ -172,19 +172,26 @@ void GPUGaussian(double*** data, int size, int blocks, int colsPerThread)
 		fprintf(stderr, "cudaMalloc failed for upperRowIdx\n");
 		return;
 	}
-	cudaStatus = cudaMalloc((void**)&devColsPerThread, sizeof(int));
+	cudaStatus = cudaMalloc((void**)&devRowsPerThread, sizeof(int));
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaMalloc failed for colsPerThread\n");
 		return;
 	}
 
+	//memcpy matrix
+	cudaStatus = cudaMemcpy(devMatrix, data, (size + 1) * size * sizeof(double), cudaMemcpyHostToDevice);
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "cudaMemcpy failed for multiplier\n");
+		return;
+	}
 	//memcpy size
 	cudaStatus = cudaMemcpy(devSize, &size, sizeof(int), cudaMemcpyHostToDevice);
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaMemcpy failed for size\n");
 		return;
 	}
-	cudaStatus = cudaMemcpy(devColsPerThread, &colsPerThread, sizeof(int), cudaMemcpyHostToDevice);
+	//memcpy rowsPerThread
+	cudaStatus = cudaMemcpy(devRowsPerThread, &rowsPerThread, sizeof(int), cudaMemcpyHostToDevice);
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaMemcpy failed for colsPerThread\n");
 		return;
@@ -194,7 +201,7 @@ void GPUGaussian(double*** data, int size, int blocks, int colsPerThread)
 	t = clock();
 	for (int i = 0; i < (size - 1); ++i)
 	{
-		if (abs((*data)[i][i]) < epsilon)
+		/*if (abs((*data)[i][i]) < epsilon)
 		{
 			int j = NULL;
 			for (j = i + 1; j < size; ++j)
@@ -208,16 +215,16 @@ void GPUGaussian(double*** data, int size, int blocks, int colsPerThread)
 
 			if (j == size - 1)
 				(*data)[i][i] = 1;
-		}
+		}*/
 
-		double* tempData = (double*)malloc((size + 1) * sizeof(double));
-		tempData = (*data)[i];
+		/*double* tempData = (double*)malloc((size + 1) * sizeof(double));
+		tempData = (*data)[i];*/
 
-		cudaStatus = cudaMemcpy((void*)devUpperRow, (void*)tempData, (size + 1) * sizeof(double), cudaMemcpyHostToDevice);
+		/*cudaStatus = cudaMemcpy((void*)devUpperRow, (void*)tempData, (size + 1) * sizeof(double), cudaMemcpyHostToDevice);
 		if (cudaStatus != cudaSuccess) {
 			fprintf(stderr, "cudaMemcpy failed for upperRow\n");
 			return;
-		}
+		}*/
 		cudaStatus = cudaMemcpy((void*)devUpperRowIdx, (void*)&i, sizeof(int), cudaMemcpyHostToDevice);
 		if (cudaStatus != cudaSuccess) {
 			fprintf(stderr, "cudaMemcpy failed for multiplier\n");
@@ -225,9 +232,9 @@ void GPUGaussian(double*** data, int size, int blocks, int colsPerThread)
 		}
 
 		//for a given pivot element, reduce all items below to zero
-		for (int j = i + 1; j < size; ++j)
-		{
-			bool breaK = false;
+		/*for (int j = i + 1; j < size; ++j)
+		{*/
+			/*bool breaK = false;
 			while (abs((*data)[j][i]) < epsilon)
 			{
 				++j;
@@ -240,65 +247,66 @@ void GPUGaussian(double*** data, int size, int blocks, int colsPerThread)
 			if (breaK)
 			{
 				break;
-			}
-			double multiplier = (*data)[i][i] / (*data)[j][i];
-			tempData = (*data)[j];
-			cudaStatus = cudaMemcpy((void*)devLowerRow, (void*)tempData, (size + 1) * sizeof(double), cudaMemcpyHostToDevice);
+			}*/
+			/*double multiplier = (*data)[i][i] / (*data)[j][i];
+			tempData = (*data)[j];*/
+			/*cudaStatus = cudaMemcpy((void*)devLowerRow, (void*)tempData, (size + 1) * sizeof(double), cudaMemcpyHostToDevice);
 			if (cudaStatus != cudaSuccess) {
 				fprintf(stderr, "cudaMemcpy failed for lowerRow HtD\n");
 				return;
-			}
-			cudaStatus = cudaMemcpy((void*)devMultiplier, (void*)&multiplier, sizeof(double), cudaMemcpyHostToDevice);
+			}*/
+			/*cudaStatus = cudaMemcpy((void*)devMultiplier, (void*)&multiplier, sizeof(double), cudaMemcpyHostToDevice);
 			if (cudaStatus != cudaSuccess) {
 				fprintf(stderr, "cudaMemcpy failed for multiplier\n");
 				return;
-			}
+			}*/
 
-			KernelForwardElim<<<blocks, 1024>>>(devUpperRow, devLowerRow, devSize, devMultiplier, devUpperRowIdx, devColsPerThread);
+			KernelForwardElim<<<blocks, 1024>>>(devMatrix, devSize, devUpperRowIdx, devRowsPerThread);
 			
 
-			double* lowerRow = (double*)malloc((size + 1) * sizeof(double));
+			double* tempMatrix = (double*)malloc((size + 1) * size * sizeof(double));
 
-			cudaStatus = cudaMemcpy((void*)lowerRow, (void*)devLowerRow, (size + 1) * sizeof(double), cudaMemcpyDeviceToHost);
+			cudaStatus = cudaMemcpy((void*)tempMatrix, (void*)devMatrix, (size + 1) * size * sizeof(double), cudaMemcpyDeviceToHost);
 			if (cudaStatus != cudaSuccess) {
 				fprintf(stderr, "cudaMemcpy failed for lowerRow DtH\n");
 				return;
 			}
+			
+			data = tempMatrix;
 
-			(*data)[j] = lowerRow;
-		}	
+		//}	
 	}
 	t = clock() - t;
 	std::cout << "GPU Forward Substituion took: " << t << "clicks (" << ((float)t) / CLOCKS_PER_SEC << " seconds.)" << endl;
 	BackSub(data, size);
 
-	cudaFree(devUpperRow);
-	cudaFree(devLowerRow);
+	cudaFree(devMatrix);
 	cudaFree(devSize);
-	cudaFree(devMultiplier);
 	cudaFree(devUpperRowIdx);
-	cudaFree(devColsPerThread);
+	cudaFree(devRowsPerThread);
 }
 
-void SwapRows(double*** data, int size, int upperRow, int lowerRow)
+void SwapRows(double* data, int size, int upperRow, int lowerRow)
 {
-	double* temp = (double*)malloc((size + 1) * sizeof(double));
-	temp = (*data)[upperRow];
-	(*data)[upperRow] = (*data)[lowerRow];
-	(*data)[lowerRow] = temp;
+	for (int i = 0; i < size + 1; ++i)
+	{
+		double temp = data[upperRow * (size + 1) + i];
+		data[upperRow * (size + 1) + i] = data[lowerRow * (size + 1) * i];
+		data[lowerRow * (size + 1) + i] = temp;
+	}
 }
 
-bool CompareResults(double*** data, double*** data2, int size)
+bool CompareResults(double* data, double* data2, int size)
 {
 	bool test = true;
 	for (int i = 0; i < size; ++i)
 	{
 		for (int j = 0; j < size + 1; ++j)
 		{
-			if (abs((*data)[i][j] - (*data2)[i][j]) > epsilon && abs((*data)[i][j]) > epsilon && abs((*data2)[i][j]) > epsilon)
+			if (abs(data[i * (size + 1) + j] - data2[i * (size + 1) + j]) > epsilon && abs(data[i * (size + 1) + j]) > epsilon && abs(data2[i * (size + 1) + j]) > epsilon)
 			{
 				cout << "Something went wrong" << endl;
-				cout << "CPU: " << (*data)[i][j] << "|\tGPU:" << (*data2)[i][j] << endl;
+				cout << "CPU: " << data[i * (size + 1) + j] << "|\tGPU:" << data2[i * (size + 1) + j] << endl;
 				test = false;
 			}
 		}
@@ -311,46 +319,50 @@ bool CompareResults(double*** data, double*** data2, int size)
 }
 
 //											data[i],	data[j],	data.size(), upperMainDiag/theOneUnderIt 
-__global__ void KernelForwardElim(double* upperRow, double* lowerRow, int* _size, double* multiplier, int* _upperRowIdx, int* colsPerThread)
+__global__ void KernelForwardElim(double* _matrix, int* _size, int* _upperRowIdx, int* _rowsPerThread)
 {
-	int _colsPerThread = *colsPerThread;
-	int startCol = (threadIdx.x + blockIdx.x * blockDim.x) * _colsPerThread;
+	int rowsPerThread = *_rowsPerThread;
 	int upperRowIdx = *_upperRowIdx;
-	for (int col = startCol; col < _colsPerThread + startCol; ++col)
+	int startRow = (threadIdx.x + blockIdx.x * blockDim.x) * rowsPerThread + 1 + upperRowIdx;
+	int size = *_size;
+	if (startRow > upperRowIdx)
 	{
-		if (col > upperRowIdx && col <= *_size)
+		for (int row = startRow; row < rowsPerThread + startRow; ++row)
 		{
-			lowerRow[col] *= *multiplier;
-			lowerRow[col] -= upperRow[col];
+			if (row < size)
+			{
+				double multiplier = _matrix[upperRowIdx * (size + 1) + upperRowIdx] / _matrix[row * (size + 1) + upperRowIdx];
+				double test = _matrix[upperRowIdx * (size + 1) + upperRowIdx];
+				double test2 = _matrix[row * (size + 1) + upperRowIdx];
+				for (int i = upperRowIdx + 1; i < size + 1; ++i)
+				{
+					_matrix[row * (size + 1) + i] *= multiplier;
+					_matrix[row * (size + 1) + i] -= _matrix[upperRowIdx * (size + 1) + i];
+					double test3 = _matrix[row * (size + 1) + i];
+				}
+			}
 		}
 	}
 }
 
-void FillMatrix(double*** data, double*** data2, double*** backup, int size)
-{
-	for (int i = 0; i < size; ++i)
-	{
-		double* temp = (double*)malloc((size + 1) * sizeof(double));
-		double* temp2 = (double*)malloc((size + 1) * sizeof(double));
-		double* temp3 = (double*)malloc((size + 1) * sizeof(double));
-		for (int j = 0; j < size + 1; ++j)
-		{
-			double val = rand() % 10 + 1;
-			temp[j] = temp2[j] = temp3[j] = val;
-		}
-		(*data)[i] = temp;
-		(*data2)[i] = temp2;
-		(*backup)[i] = temp3;
-	}
-}
-
-void CopyMatrix(double*** src, double*** dest, int size)
+void FillMatrix(double* data, double* data2, double* backup, int size)
 {
 	for (int i = 0; i < size; ++i)
 	{
 		for (int j = 0; j < size + 1; ++j)
 		{
-			(*dest)[i][j] = (*src)[i][j];
+			data[i * (size + 1)  + j] = data2[i * (size + 1) + j] = backup[i * (size + 1) + j] = rand() % 10 + 1;
+		}
+	}
+}
+
+void CopyMatrix(double* src, double* dest, int size)
+{
+	for (int i = 0; i < size; ++i)
+	{
+		for (int j = 0; j < size + 1; ++j)
+		{
+			dest[i * (size + 1) + j] = src[i * (size + 1) + j];
 		}
 	}
 }
