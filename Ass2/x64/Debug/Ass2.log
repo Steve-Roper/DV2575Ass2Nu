@@ -3,10 +3,10 @@
   C:\temp\DV2575Ass2Nu\Ass2>"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v9.1\bin\nvcc.exe" -gencode=arch=compute_30,code=\"sm_30,compute_30\" --use-local-env --cl-version 2017 -ccbin "C:\Program Files (x86)\Microsoft Visual Studio\2017\Professional\VC\Tools\MSVC\14.10.25017\bin\HostX86\x64" -x cu  -I"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v9.1\include" -I"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v9.1\include"  -G   --keep-dir x64\Debug -maxrregcount=0  --machine 64 --compile -cudart static  -g   -DWIN32 -DWIN64 -D_DEBUG -D_CONSOLE -D_MBCS -Xcompiler "/EHsc /W3 /nologo /Od /FS /Zi /RTC1 /MDd " -o x64\Debug\kernel.cu.obj "C:\temp\DV2575Ass2Nu\Ass2\kernel.cu" 
   kernel.cu
 C:/temp/DV2575Ass2Nu/Ass2/kernel.cu(26): warning C4244: 'argument': conversion from 'time_t' to 'unsigned int', possible loss of data
-C:/temp/DV2575Ass2Nu/Ass2/kernel.cu(78): warning C4018: '<': signed/unsigned mismatch
-C:/temp/DV2575Ass2Nu/Ass2/kernel.cu(96): warning C4018: '<': signed/unsigned mismatch
-C:/temp/DV2575Ass2Nu/Ass2/kernel.cu(99): warning C4018: '<': signed/unsigned mismatch
-C:/temp/DV2575Ass2Nu/Ass2/kernel.cu(115): warning C4018: '<': signed/unsigned mismatch
+C:/temp/DV2575Ass2Nu/Ass2/kernel.cu(80): warning C4018: '<': signed/unsigned mismatch
+C:/temp/DV2575Ass2Nu/Ass2/kernel.cu(98): warning C4018: '<': signed/unsigned mismatch
+C:/temp/DV2575Ass2Nu/Ass2/kernel.cu(101): warning C4018: '<': signed/unsigned mismatch
+C:/temp/DV2575Ass2Nu/Ass2/kernel.cu(116): warning C4018: '<': signed/unsigned mismatch
   Ass2.vcxproj -> C:\temp\DV2575Ass2Nu\x64\Debug\Ass2.exe
   Ass2.vcxproj -> C:\temp\DV2575Ass2Nu\x64\Debug\Ass2.pdb (Partial PDB)
   copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v9.1\bin\cudart*.dll" "C:\temp\DV2575Ass2Nu\x64\Debug\"

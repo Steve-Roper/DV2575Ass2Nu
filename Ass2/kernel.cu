@@ -30,10 +30,12 @@ int main()
 	//int size = 256;
 	//int colsPerThread = 1;
 	vector<vector<double>> data, data2, backup;
+	//double** data, data2, backup;
 
-	for (int size = 3; size < 5; size *= 2)
+	for (int size = 128; size < 1025; size *= 2)
 	{
 		FillMatrix(size, data);
+		//backup = (double**)malloc((size + 1) * size * sizeof(double));
 		backup = data;
 		Gaussian(data, size);
 		for (int colsPerThread = 1; colsPerThread < 9; colsPerThread *= 2)
@@ -111,8 +113,7 @@ void ForwardElim(vector<vector<double>> &data, int size)
 			}
 			double lower = data[j][i];
 			double multiplier = upper / lower;
-			data[j][i] = 0;
-			for (unsigned int k = i; k < size + 1; ++k)
+			for (unsigned int k = i + 1; k < size + 1; ++k)
 			{
 				data[j][k] *= multiplier;
 				data[j][k] -= data[i][k];
@@ -272,6 +273,13 @@ void GPUGaussian(vector<vector<double>>& data, int size, int blocks, int colsPer
 	t = clock() - t;
 	std::cout << "GPU Forward Substituion took: " << t << "clicks (" << ((float)t) / CLOCKS_PER_SEC << " seconds.)" << endl;
 	BackSub(data, size);
+
+	cudaFree(devUpperRow);
+	cudaFree(devLowerRow);
+	cudaFree(devSize);
+	cudaFree(devMultiplier);
+	cudaFree(devUpperRowIdx);
+	cudaFree(devColsPerThread);
 }
 
 void SwapRows(vector<vector<double>> &data, int size, int upperRow, int lowerRow)
@@ -308,7 +316,7 @@ bool CompareResults(vector<vector<double>>& data, vector<vector<double>>& data2,
 __global__ void KernelForwardElim(double* upperRow, double* lowerRow, int* _size, double* multiplier, int* _upperRowIdx, int* colsPerThread)
 {
 	int _colsPerThread = *colsPerThread;
-	int startCol = threadIdx.x + blockIdx.x * blockDim.x * _colsPerThread;
+	int startCol = (threadIdx.x + blockIdx.x * blockDim.x) * _colsPerThread;
 	int upperRowIdx = *_upperRowIdx;
 	for (int col = startCol; col < _colsPerThread + startCol; ++col)
 	{
@@ -316,10 +324,6 @@ __global__ void KernelForwardElim(double* upperRow, double* lowerRow, int* _size
 		{
 			lowerRow[col] *= *multiplier;
 			lowerRow[col] -= upperRow[col];
-		}
-		if (col == upperRowIdx)
-		{
-			lowerRow[col] = 0;
 		}
 	}
 }
